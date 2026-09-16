@@ -1,0 +1,45 @@
+name: UI contracts
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/ui/**
+      - src/main.tsx
+      - e2e/**
+      - .github/workflows/ui-contracts.yml
+      - .github/workflows/ci.yml
+permissions:
+  contents: read
+concurrency:
+  group: ui-contracts-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_PATH: /China-Airlines/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Install CJK fonts
+        run: sudo apt-get install -y fonts-noto-cjk
+      - name: Check common containers and browser interaction
+        run: npx playwright test e2e/flight-animation.spec.ts e2e/start-map-i18n.spec.ts e2e/ui-workspace.spec.ts e2e/navigation-stability.spec.ts e2e/browse-ux.spec.ts e2e/energy.spec.ts e2e/flight-board.spec.ts e2e/fleet-entry.spec.ts e2e/game.spec.ts e2e/organization.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-contract-evidence
+          path: |
+            artifacts/
+            test-results/
+            playwright-report/
+          retention-days: 7
