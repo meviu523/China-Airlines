@@ -12,7 +12,44 @@ for(const model of ALL_MODELS)test(`dedicated layers cover ${model.id} without r
   await page.getByLabel('选择存档文件').setInputFiles({name:'current-aircraft.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(s))});
   await expect(page.getByRole('status').filter({hasText:'存档导入成功'})).toBeVisible();
   await page.getByRole('button',{name:'关闭存档设置',exact:true}).click();
+  const furniture = () => page.locator('.cabin-place-art').evaluateAll(nodes => nodes.map(node => {
+    const style = getComputedStyle(node);
+    return { slot: node.closest('.cabin-anchor')!.getAttribute('data-anchor-id'), width: style.width,
+      height: style.height, bottom: style.bottom, left: style.left, transform: style.transform };
+  }));
+  const captionClearance = async () => {
+    const slots = await page.locator('.cabin-anchor[data-slot-active=true]').evaluateAll(nodes => nodes.map(node => {
+      const slot = node.getBoundingClientRect();
+      const caption = node.querySelector('.job-info,.cabin-empty>span')!.getBoundingClientRect();
+      const furniture = node.querySelector('.cabin-place-art')!.getBoundingClientRect();
+      const occupant = node.querySelector('.job-art')?.getBoundingClientRect();
+      return { id: node.getAttribute('data-anchor-id'), slotRight: slot.right, width: slot.width,
+        captionLeft: caption.left, captionRight: caption.right, captionWidth: caption.width,
+        furnitureRight: furniture.right, occupantRight: occupant?.right };
+    }));
+    expect(slots.length).toBeGreaterThan(0);
+    for (const slot of slots) {
+      expect(slot.captionWidth, `${model.id}/${slot.id}: caption width`).toBeGreaterThan(0);
+      // Use the rendered caption boundary, not a duplicated CSS percentage. The 1%
+      // minimum gap leaves subpixel tolerance inside the designed 2% gutter.
+      expect(slot.furnitureRight + slot.width * .01, `${model.id}/${slot.id}: furniture clearance`).toBeLessThanOrEqual(slot.captionLeft + .1);
+      if (slot.occupantRight !== undefined) expect(slot.occupantRight + slot.width * .01, `${model.id}/${slot.id}: occupant clearance`).toBeLessThanOrEqual(slot.captionLeft + .1);
+      expect(slot.captionRight, `${model.id}/${slot.id}: caption containment`).toBeLessThanOrEqual(slot.slotRight + .1);
+    }
+  };
+  await captionClearance();
+  await page.locator('.cabin-place-art').evaluateAll(nodes => nodes.forEach((node, i) => node.setAttribute('data-furniture-node', String(i))));
+  const identity = () => page.locator('.cabin-place-art').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-furniture-node')));
+  const before = await furniture(), identities = await identity(); expect(before.length).toBeGreaterThan(0);
   await page.getByRole('button',{name:/^同目的地装载：/}).first().click();
+  expect(await furniture()).toEqual(before); expect(await identity()).toEqual(identities);
+  await captionClearance();
+  const inactive = page.locator('.cabin-anchor[data-slot-active=false]');
+  for (const anchor of await inactive.all()) {
+    await expect(anchor).toHaveAttribute('inert', '');
+    await expect(anchor).toBeHidden();
+    await expect(anchor.locator('[data-testid=loaded-order],[data-testid=cabin-empty-place]')).toHaveCount(0);
+  }
   const frame=page.getByTestId('plane-art'),cabin=page.getByTestId('aircraft-cabin'),near=page.getByTestId('aircraft-near-layer');
   await expect(frame).toHaveAttribute('data-model-id',model.id);
   await expect(frame.locator('.cutaway-airframe')).toHaveAttribute('src',new RegExp(`aircraft-${model.id}-cutaway-v4.png$`));
@@ -25,7 +62,7 @@ for(const model of ALL_MODELS)test(`dedicated layers cover ${model.id} without r
   }
   const ids=await cabin.getByTestId('loaded-order').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('data-order-id')));
   await cabin.evaluate(n=>n.setAttribute('data-mount-marker','kept'));
-  if(model.id==='starter-swift')await page.screenshot({path:'artifacts/aircraft-v4-interior.png'});
+  await page.screenshot({path:`artifacts/aircraft-v4-${model.id}-interior.png`});
   await page.getByRole('button',{name:'查看外观',exact:true}).click();await expect(near).toBeVisible();
   await expect(cabin).toHaveAttribute('inert','');await expect(cabin).toHaveAttribute('data-mount-marker','kept');
   expect(await cabin.getByTestId('loaded-order').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('data-order-id')))).toEqual(ids);
@@ -41,9 +78,24 @@ for(const model of ALL_MODELS)test(`dedicated layers cover ${model.id} without r
     return {min,corner:ctx.getImageData(0,0,1,1).data[3]};
   });
   expect(coverage.corner).toBe(0);expect(coverage.min).toBeGreaterThan(245);
-  if(model.id==='starter-swift')await page.screenshot({path:'artifacts/aircraft-v4-exterior.png'});
+  const sameCanvas = async () => {
+    const geometry = await frame.locator('.cutaway-airframe,.aircraft-near-layer').evaluateAll(nodes => nodes.map(node => {
+      const image = node as HTMLImageElement, rect = image.getBoundingClientRect();
+      return { width: image.naturalWidth, height: image.naturalHeight, x: rect.x, y: rect.y, w: rect.width, h: rect.height };
+    }));
+    expect(geometry).toHaveLength(2);
+    expect(geometry[0]!.width).toBe(1536); expect(geometry[0]!.height).toBe(590);
+    expect(geometry[0]).toEqual(geometry[1]);
+    expect(geometry[0]!.w / geometry[0]!.h).toBeCloseTo(1536 / 590, 4);
+  };
+  await sameCanvas();
+  await page.screenshot({path:`artifacts/aircraft-v4-${model.id}-exterior.png`});
+  await page.setViewportSize({width:844,height:390});
+  await page.clock.runFor(34);
+  await sameCanvas();
   await page.getByRole('button',{name:'查看机舱',exact:true}).click();await expect(near).toBeHidden();
   await expect(cabin).not.toHaveAttribute('inert','');await expect(cabin).toHaveAttribute('data-mount-marker','kept');
+  await captionClearance();
   await cabin.getByTestId('loaded-order').first().click({trial:true});
   await page.getByRole('button',{name:'存档设置',exact:true}).click();const pending=page.waitForEvent('download');
   await page.getByRole('button',{name:'导出存档',exact:true}).click();const saved=JSON.parse(await readFile((await (await pending).path())!,'utf8'));
