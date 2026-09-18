@@ -44,8 +44,11 @@ jobs:
     timeout-minutes: 10
     steps:
       # PR verification is the merge gate. Main builds the deterministic Pages artifact once.
-      # Existing site configuration is required. Never enable billing or change visibility.
+      # Allow configure-pages to create the Pages site for restored/new repositories.
+      # Never enable billing or change repository visibility.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - name: Deploy Pages artifact
         id: deployment
         uses: actions/deploy-pages@v4
